@@ -114,21 +114,46 @@ def rakuten_search(keyword, sort="-reviewCount", hits=20):
             f"{data.get('error_description', '詳細不明')}"
         )
 
+    # Rakuten's live 2026 response can expose the item container as "Items"
+    # even though the documentation examples show "items". Accept both.
     items = data.get("items")
+    container_name = "items"
+    if items is None:
+        items = data.get("Items")
+        container_name = "Items"
+
     if items is None:
         keys = ", ".join(list(data.keys())[:12])
         raise RuntimeError(
-            f"API応答に items がありません。返却キー: {keys or 'なし'}"
+            f"API応答に items / Items がありません。返却キー: {keys or 'なし'}"
         )
+
+    # Be tolerant of wrapper forms such as {"Item": {...}} / {"item": {...}}.
+    normalized = []
+    if isinstance(items, list):
+        for row in items:
+            if isinstance(row, dict) and isinstance(row.get("Item"), dict):
+                normalized.append(row["Item"])
+            elif isinstance(row, dict) and isinstance(row.get("item"), dict):
+                normalized.append(row["item"])
+            elif isinstance(row, dict):
+                normalized.append(row)
+    elif isinstance(items, dict):
+        candidate = items.get("Item") or items.get("item") or []
+        if isinstance(candidate, list):
+            normalized = candidate
+        elif isinstance(candidate, dict):
+            normalized = [candidate]
 
     diagnostic = {
         "http": response.status_code,
         "count": data.get("count"),
         "hits": data.get("hits"),
         "page": data.get("page"),
-        "items_len": len(items),
+        "items_len": len(normalized),
+        "container": container_name,
     }
-    return items, diagnostic
+    return normalized, diagnostic
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -176,6 +201,7 @@ input{width:100%;background:white}select{background:white}button{background:var(
 HTTP: {{ diagnostic.http }}<br>
 楽天検索総件数 count: {{ diagnostic.count }}<br>
 API返却件数 hits: {{ diagnostic.hits }}<br>
+商品コンテナ: {{ diagnostic.container }}<br>
 items配列: {{ diagnostic.items_len }}件<br>
 page: {{ diagnostic.page }}
 </div>
