@@ -87,19 +87,48 @@ def rakuten_search(keyword, sort="-reviewCount", hits=20):
         "imageFlag": 1,
         "hasReviewFlag": 1,
         "carrier": 2,
+        "field": 0,
     }
     if affiliate_id:
         params["affiliateId"] = affiliate_id
 
-    headers = {"accessKey": access_key}
-    response = requests.get(API_URL, params=params, headers=headers, timeout=20)
+    # 2026-07-01 API accepts accessKey as a header or query parameter.
+    # Use query parameter here to make the request easy to diagnose consistently.
+    params["accessKey"] = access_key
+    response = requests.get(API_URL, params=params, timeout=20)
+
+    try:
+        data = response.json()
+    except Exception:
+        raise RuntimeError(
+            f"楽天API HTTP {response.status_code}: JSONではない応答が返りました。"
+        )
+
     if response.status_code != 200:
-        try:
-            detail = response.json().get("error_description", response.text)
-        except Exception:
-            detail = response.text
-        raise RuntimeError(f"楽天APIエラー {response.status_code}: {detail[:250]}")
-    return response.json().get("items", [])
+        detail = data.get("error_description") or data.get("error") or "詳細不明"
+        raise RuntimeError(f"楽天API HTTP {response.status_code}: {detail}")
+
+    if data.get("error"):
+        raise RuntimeError(
+            f"楽天APIエラー: {data.get('error')} / "
+            f"{data.get('error_description', '詳細不明')}"
+        )
+
+    items = data.get("items")
+    if items is None:
+        keys = ", ".join(list(data.keys())[:12])
+        raise RuntimeError(
+            f"API応答に items がありません。返却キー: {keys or 'なし'}"
+        )
+
+    diagnostic = {
+        "http": response.status_code,
+        "count": data.get("count"),
+        "hits": data.get("hits"),
+        "page": data.get("page"),
+        "items_len": len(items),
+    }
+    return items, diagnostic
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -139,7 +168,19 @@ input{width:100%;background:white}select{background:white}button{background:var(
 </div>
 <p class="note">候補スコアはレビュー数・評価・価格帯・アフィリエイト料率から作る独自指標です。実際の売上を保証するものではありません。</p>
 </form>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if error %}<div class="error"><strong>診断結果</strong><br>{{ error }}</div>{% endif %}
+{% if diagnostic %}
+<div class="card">
+<strong>楽天API 診断</strong>
+<div class="stats">
+HTTP: {{ diagnostic.http }}<br>
+楽天検索総件数 count: {{ diagnostic.count }}<br>
+API返却件数 hits: {{ diagnostic.hits }}<br>
+items配列: {{ diagnostic.items_len }}件<br>
+page: {{ diagnostic.page }}
+</div>
+</div>
+{% endif %}
 {% if q and not error %}<p class="note">{{ items|length }}件取得 → 独自スコア順に表示</p>{% endif %}
 {% for x in items %}
 <div class="card">
@@ -174,9 +215,10 @@ def home():
 
     items_out = []
     error = None
+    diagnostic = None
     if q:
         try:
-            items = rakuten_search(q, sort=sort)
+            items, diagnostic = rakuten_search(q, sort=sort)
             for item in items:
                 image = ""
                 images = item.get("mediumImageUrls") or []
@@ -204,7 +246,10 @@ def home():
         except Exception as e:
             error = str(e)
 
-    return render_template_string(PAGE, q=q, sort=sort, items=items_out, error=error)
+    return render_template_string(
+        PAGE, q=q, sort=sort, items=items_out,
+        error=error, diagnostic=diagnostic
+    )
 
 @app.route("/health")
 def health():
