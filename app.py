@@ -1,8 +1,28 @@
-import os, math, re, requests
+import os, math, re, requests, json, random
+from datetime import datetime
 from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
 API_URL = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701"
+HISTORY_FILE = "/tmp/yamenchan_history.json"
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_history(rows):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(rows[-100:], f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def recent_openings():
+    rows=load_history()[-10:]
+    return [r.get("opening","") for r in rows if r.get("opening")]
 
 THEMES = {
     "家事": ["家事 便利グッズ", "掃除 便利グッズ", "キッチン 時短 便利"],
@@ -34,12 +54,28 @@ def score(item, keyword):
     ar=float(item.get("affiliateRate") or 0)
     price=int(item.get("itemPrice") or 0)
     rel=relevance(item.get("itemName",""), keyword)
-    review=clamp(math.log10(rc+1)/4*32,0,32)
-    rating=clamp((ra-3.5)/1.5*23,0,23)
-    aff=clamp(ar/10*12,0,12)
+    review=clamp(math.log10(rc+1)/4*30,0,30)
+    rating=clamp((ra-3.5)/1.5*22,0,22)
+    aff=clamp(ar/10*10,0,10)
     price_pts=13 if 1000<=price<=8000 else (9 if 500<=price<=15000 else 4)
-    rel_pts=clamp(rel,0,20)
+    rel_pts=clamp(rel,0,25)
     return round(review+rating+aff+price_pts+rel_pts,1)
+
+def badge(item, keyword):
+    rc=int(item.get("reviewCount") or 0)
+    ra=float(item.get("reviewAverage") or 0)
+    ar=float(item.get("affiliateRate") or 0)
+    rel=relevance(item.get("itemName",""), keyword)
+    if ar >= 5: return "高料率"
+    if rc >= 1500 and ra >= 4.4: return "定番・高評価"
+    if 30 <= rc <= 700 and ra >= 4.3 and rel >= 8: return "発見候補"
+    if rc >= 300 and ra >= 4.5: return "高評価"
+    return "注目候補"
+
+def display_name(name):
+    s=re.sub(r"【[^】]*】|\[[^\]]*\]"," ",name or "")
+    s=re.sub(r"\s+"," ",s).strip()
+    return short(s,38)
 
 def normalize_items(data):
     rows=data.get("items")
@@ -52,11 +88,11 @@ def normalize_items(data):
             elif isinstance(r,dict): out.append(r)
     return out
 
-def search_api(keyword, hits=20):
+def search_api(keyword, hits=20, sort="-reviewCount"):
     aid, key, aff = env("RAKUTEN_APPLICATION_ID"), env("RAKUTEN_ACCESS_KEY"), env("RAKUTEN_AFFILIATE_ID")
     if not aid or not key: raise RuntimeError("楽天API環境変数が不足しています。")
     params={"applicationId":aid,"accessKey":key,"keyword":keyword,"format":"json","formatVersion":2,
-            "hits":hits,"sort":"-reviewCount","availability":1,"imageFlag":1,"carrier":2,"field":0}
+            "hits":hits,"sort":sort,"availability":1,"imageFlag":1,"carrier":2,"field":0}
     if aff: params["affiliateId"]=aff
     r=requests.get(API_URL,params=params,timeout=20)
     try: data=r.json()
@@ -78,17 +114,51 @@ def short(s,n):
 
 def threads_drafts(item, owned, experience=""):
     name=short(item.get("itemName","この商品"),32)
-    if owned and experience.strip():
-        exp=experience.strip()
-        return [
-            f"これ、もっと早く使えばよかった😂\n\n{name}\n{exp}\n\nこういう『ちょっとラクになるもの』、みんな何使ってる？🐾",
-            f"毎回ちょっと面倒だったことが、これでラクになった。\n\n{name}\n{exp}\n\n同じことで困ってる人いる？",
-            f"こういう小さな便利グッズが一番助かるかも。\n\n{name}\n{exp}\n\nみんなの買ってよかった便利グッズも知りたい🐾"
-        ]
+    used=" ".join(recent_openings())
+    hooks=[
+        ("あるある→解決", "これ毎回やるの、地味に面倒じゃない？"),
+        ("発見", "待って、こんなのあるの😂"),
+        ("Before→After", "これ、置き場所問題かなり減らせそう。"),
+        ("会話", "これみんなどうしてる？"),
+    ]
+    # Avoid recently repeated openings where possible.
+    hooks.sort(key=lambda x: x[1] in used)
+    out=[]
+    for kind,hook in hooks:
+        if owned and experience.strip():
+            body=f"{name}\n{experience.strip()}"
+            endings={
+                "あるある→解決":"こういう小さい面倒が減るの、結構うれしい。",
+                "発見":"こういうの誰か早く教えてよ😂",
+                "Before→After":"使い方ひとつで結構変わるもんだな。",
+                "会話":"似たの使ってる人いる？",
+            }
+        else:
+            body=f"{name}\nこういうのでひと手間減らせるなら、ちょっと気になる。"
+            endings={
+                "あるある→解決":"これなら面倒ひとつ減らせそう。",
+                "発見":"こういうの誰か早く教えてよ😂",
+                "Before→After":"実際どうなんだろ。ちょっと気になる。",
+                "会話":"使ってる人いたら感想知りたい🐾",
+            }
+        out.append({"kind":kind,"text":f"{hook}\n\n{body}\n\n{endings[kind]}"})
+    return out
+
+def ai_check(text):
+    flags=[]
+    bad=["ぜひチェック","おすすめポイント","いかがでしょう","〜ではないでしょうか","必見","絶対買うべき"]
+    for x in bad:
+        if x in text: flags.append(f"広告・AIっぽい表現「{x}」")
+    if text.count("✨")>=2: flags.append("✨が多め")
+    if text.count("？")>=3: flags.append("質問が多すぎ")
+    if len(text)>230: flags.append("Threads文として少し長め")
+    return flags or ["不自然な広告表現は見当たりません"]
+
+def schedule_hint():
     return [
-        f"え、これ知らなかった😂\n\n{name}\n毎日のちょっとした面倒を減らせそうで気になる。\n\nこれ使ったことある人いる？🐾",
-        f"これ毎回やるの、地味に面倒じゃない？\n\n{name}\nこういう方法でラクにできるならかなり気になる。\n\nみんなはどうしてる？",
-        f"面倒くさいを減らせそうなもの見つけた。\n\n{name}\nこういう『ひと手間を減らす系』の便利グッズ、よさそう。\n\n似たもの使ってる人いたら感想知りたい🐾"
+        {"time":"11:30〜13:00","type":"商品なし・あるある/質問","why":"昼休みのテスト枠"},
+        {"time":"18:00〜20:00","type":"Threads便利グッズ","why":"夕方〜夜の主力テスト枠"},
+        {"time":"20:00〜22:00","type":"楽天ROOM","why":"ROOMの夜間閲覧を狙うテスト枠"},
     ]
 
 def room_draft(item, owned, experience=""):
@@ -115,50 +185,90 @@ a.buy{display:inline-block;background:var(--accent);color:white;text-decoration:
 label{font-size:13px;color:var(--sub)}.ownbox{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 @media(max-width:520px){.pic{width:82px;height:82px}.row{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
-<h1>やめんちゃん AI 🐾</h1><p class="tag">面倒くさいを、ちょっとラクに。今日の投稿候補を発掘。</p>
+<h1>やめんちゃん AI 🐾</h1><p class="tag">面倒くさいを、ちょっとラクに。今日の運用までまとめる。 <small>v4</small></p>
 <div class="panel"><div class="themes">
 {% for t in themes %}<a class="theme {% if t==theme %}on{% endif %}" href="/?theme={{t}}">{{t}}</a>{% endfor %}
 </div><form method="get" style="margin-top:10px"><input type="hidden" name="theme" value="{{theme}}">
 <div class="row"><input name="q" value="{{q}}" placeholder="自由検索：例 水切り 便利"><button>検索</button></div></form>
 <p class="small">テーマを選ぶと関連キーワードを複数検索して候補をまとめます。スコアは楽天の売上データではなく、関連度・レビュー・評価・価格帯・料率による独自指標です。</p></div>
 {% if error %}<div class="error">{{error}}</div>{% endif %}
+<div class="panel"><b>今日のやめんちゃん作戦</b>
+{% for s in schedule %}<div class="small" style="margin-top:7px"><b>{{s.time}}</b>　{{s.type}}<br>{{s.why}}</div>{% endfor %}
+<div class="small" style="margin-top:9px">※時間帯は固定の正解ではなく初期テスト枠。実績が貯まったら、やめんちゃん自身の結果を優先します。</div></div>
 {% if items %}<p class="small"><b>今日の候補 TOP {{items|length}}</b>　※同一商品を整理して表示</p>{% endif %}
 {% for x in items %}<div class="card"><div class="top">
 {% if x.image %}<img class="pic" src="{{x.image}}" alt="">{% endif %}<div class="meta"><span class="score">候補スコア {{x.score}}/100</span>
-<div class="name">{{x.itemName}}</div><div class="small">{{"{:,}".format(x.itemPrice)}}円 ・ ★{{x.reviewAverage}}（{{"{:,}".format(x.reviewCount)}}件）・ 料率{{x.affiliateRate}}%</div></div></div>
+<div class="name">{{x.itemName}}</div><div class="small"><b>{{x.badge}}</b><br>{{"{:,}".format(x.itemPrice)}}円 ・ ★{{x.reviewAverage}}（{{"{:,}".format(x.reviewCount)}}件）・ 料率{{x.affiliateRate}}%</div></div></div>
 <details><summary>投稿文を作る</summary><div class="ownbox">
 <form method="post"><input type="hidden" name="payload" value="{{x.idx}}">
 <label>この商品は？</label><select name="owned"><option value="no">🔵 持っていない</option><option value="yes">🟢 持っている</option></select>
 <label>持っている場合：実際に使って感じたこと</label><textarea name="experience" rows="3" placeholder="例：汚れてもサッと拭けて、掃除がかなりラク"></textarea>
 <button style="margin-top:8px">文案を表示</button></form>
-{% if selected==x.idx %}{% for d in drafts %}<div class="draft">{{d}}</div>{% endfor %}<div class="draft">{{room}}</div>{% endif %}
+{% if selected==x.idx %}
+{% for d in drafts %}<div class="small"><b>{{d.kind}}</b></div><div class="draft">{{d.text}}</div>{% endfor %}
+<div class="small"><b>AI感チェック</b></div>
+{% for c in checks %}<div class="small">・{{c}}</div>{% endfor %}
+{% if room %}<div class="draft">{{room}}</div>{% endif %}
+{% endif %}
 </div></details><div style="margin-top:10px"><a class="buy" href="{{x.url}}" target="_blank" rel="noopener">楽天で確認</a></div></div>{% endfor %}
-</div></body></html>"""
+<div class="panel"><b>投稿実績を記録</b>
+<form method="post" action="/log">
+<div class="row" style="margin-top:8px"><input name="time" placeholder="投稿時刻 例 18:40"><input name="type" placeholder="型 例 発見"></div>
+<div class="row" style="margin-top:8px"><input name="views" type="number" placeholder="表示数"><input name="replies" type="number" placeholder="返信数"></div>
+<div class="row" style="margin-top:8px"><input name="profile" type="number" placeholder="プロフィール閲覧"><input name="clicks" type="number" placeholder="ROOMクリック"></div>
+<input style="margin-top:8px" name="opening" placeholder="冒頭の一文（重複防止に利用）">
+<button style="margin-top:8px">記録する</button></form>
+{% if history %}<div class="small" style="margin-top:10px">記録済み {{history|length}}件。直近の冒頭表現を投稿文生成時の重複回避に使います。</div>{% endif %}
+</div></div></body></html>"""
 
 def collect(theme, custom=""):
     keywords=[custom] if custom else THEMES.get(theme, THEMES["便利グッズ"])
     pool={}
     for kw in keywords:
-        for item in search_api(kw,20):
-            name=item.get("itemName","")
-            rel=relevance(name,kw)
-            if rel < 0: continue
-            key=item.get("itemCode") or item.get("itemUrl") or name
-            s=score(item,kw)
-            if key not in pool or s>pool[key][1]: pool[key]=(item,s)
-    ranked=sorted(pool.values(),key=lambda z:z[1],reverse=True)[:10]
-    return ranked
+        for sort in ("-reviewCount","standard"):
+            for item in search_api(kw,20,sort):
+                name=item.get("itemName","")
+                rel=relevance(name,kw)
+                if rel < 0: continue
+                key=item.get("itemCode") or item.get("itemUrl") or name
+                s=score(item,kw)
+                if key not in pool or s>pool[key][1]:
+                    pool[key]=(item,s,kw)
+
+    rows=list(pool.values())
+    rows.sort(key=lambda z:z[1],reverse=True)
+
+    # Mix categories so the list is not filled only by old bestsellers.
+    chosen=[]; used=set()
+    def take(label, n):
+        for item,s,kw in rows:
+            key=item.get("itemCode") or item.get("itemUrl") or item.get("itemName")
+            if key in used or badge(item,kw)!=label: continue
+            chosen.append((item,s,kw,label)); used.add(key)
+            if sum(1 for x in chosen if x[3]==label)>=n: break
+
+    take("定番・高評価",3)
+    take("発見候補",3)
+    take("高料率",2)
+    take("高評価",2)
+    for item,s,kw in rows:
+        if len(chosen)>=10: break
+        key=item.get("itemCode") or item.get("itemUrl") or item.get("itemName")
+        if key not in used:
+            chosen.append((item,s,kw,badge(item,kw))); used.add(key)
+    return chosen[:10]
 
 @app.route("/",methods=["GET","POST"])
 def home():
     theme=request.values.get("theme","便利グッズ")
     if theme not in THEMES: theme="便利グッズ"
     q=request.values.get("q","").strip()
-    error=None; cards=[]; selected=-1; drafts=[]; room=""
+    error=None; cards=[]; selected=-1; drafts=[]; room=""; checks=[]
     try:
         ranked=collect(theme,q)
-        for i,(item,s) in enumerate(ranked):
-            cards.append({"idx":i,"itemName":item.get("itemName",""),"itemPrice":int(item.get("itemPrice") or 0),
+        for i,(item,s,kw,label) in enumerate(ranked):
+            cards.append({"idx":i,"itemName":display_name(item.get("itemName","")),"fullName":item.get("itemName",""),
+              "badge":label,"itemPrice":int(item.get("itemPrice") or 0),
               "reviewAverage":float(item.get("reviewAverage") or 0),"reviewCount":int(item.get("reviewCount") or 0),
               "affiliateRate":float(item.get("affiliateRate") or 0),"image":image_url(item),"score":s,
               "url":item.get("affiliateUrl") or item.get("itemUrl") or "#","raw":item})
@@ -171,12 +281,31 @@ def home():
                     room=""
                 else:
                     drafts=threads_drafts(cards[selected]["raw"],owned,exp)
+                    checks=ai_check(drafts[0]["text"]) if drafts else []
                     room="ROOM案\n"+room_draft(cards[selected]["raw"],owned,exp)
     except Exception as e: error=str(e)
-    return render_template_string(PAGE,themes=THEMES.keys(),theme=theme,q=q,items=cards,error=error,selected=selected,drafts=drafts,room=room)
+    return render_template_string(PAGE,themes=THEMES.keys(),theme=theme,q=q,items=cards,error=error,
+      selected=selected,drafts=drafts,room=room,checks=checks,schedule=schedule_hint(),history=load_history())
+
+@app.route("/log",methods=["POST"])
+def log_result():
+    rows=load_history()
+    def num(k):
+        try: return int(request.form.get(k) or 0)
+        except: return 0
+    rows.append({
+        "date":datetime.now().strftime("%Y-%m-%d"),
+        "time":request.form.get("time","").strip(),
+        "type":request.form.get("type","").strip(),
+        "views":num("views"),"replies":num("replies"),
+        "profile":num("profile"),"clicks":num("clicks"),
+        "opening":request.form.get("opening","").strip()
+    })
+    save_history(rows)
+    return """<meta name="viewport" content="width=device-width,initial-scale=1"><div style="font-family:sans-serif;padding:30px"><h2>記録しました 🐾</h2><a href="/">トップへ戻る</a></div>"""
 
 @app.route("/health")
-def health(): return {"status":"ok","version":"v2"}
+def health(): return {"status":"ok","version":"v4"}
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.environ.get("PORT","10000")))
