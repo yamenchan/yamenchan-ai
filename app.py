@@ -141,22 +141,40 @@ def product_context(title):
         if any(k.lower() in t for k in keys): return label,pain,benefit
     return "便利アイテム","暮らしの小さな面倒","ひと手間を減らす"
 
+def feature_headline(title):
+    t=title.lower()
+    rules=[
+      (["スプレーボトル","ボトルハンガー"],"掃除スプレーを浮かせて収納"),
+      (["回転","絵本","本棚"],"省スペースでたっぷり絵本収納"),
+      (["プレイマット"],"必要な広さで使えるプレイマット"),
+      (["水切り","ドレイン"],"水まわりをスッキリ水切り"),
+      (["マグネット"],"浮かせてスッキリ収納"),
+      (["折りたたみ"],"使わない時はコンパクトに"),
+      (["ハンガー","洗濯"],"洗濯のひと手間をラクに"),
+      (["掃除","クリーナー"],"掃除のひと手間をラクに"),
+      (["キッチン","調理"],"キッチンのひと手間をラクに"),
+      (["ベビー","キッズ","子供","こども"],"子育ての小さな手間をラクに"),
+      (["収納","ラック","ホルダー"],"置き場所をスッキリ収納"),
+    ]
+    for keys,head in rules:
+        if any(k.lower() in t for k in keys): return head
+    return "暮らしの小さな面倒をラクに"
+
 def threads_drafts(item, owned, experience=""):
-    label,pain,benefit=product_context(item.get("itemName",""))
+    title=item.get("itemName","")
+    label,pain,benefit=product_context(title)
+    head=feature_headline(title)
     if owned and experience.strip():
         e=experience.strip()
         return [
-          {"kind":"実体験","text":f"{pain}、地味に面倒だった。\\n\\n{e}\\n\\nこういう小さい面倒が減るの、結構うれしい。"},
-          {"kind":"あるある","text":f"{pain}って、みんなどうしてる？\\n\\nうちはこれを使ってる。\\n{e}\\n\\n地味だけどこういうの助かる。"},
-          {"kind":"気づき","text":f"これ使い始めてから気づいた。\\n\\n{e}\\n\\n便利グッズって、毎日のひと手間が減るのがいい。"},
-          {"kind":"会話","text":f"{label}って何使ってる？\\n\\nうちはこれ。\\n{e}\\n\\n他にもラクになるやつあったら知りたい🐾"}
+          {"kind":"共感・実体験","text":f"【{head}】\n\n{pain}って地味に面倒。\n\n{e}\n\nこういう小さい手間が減るの、結構うれしい。"},
+          {"kind":"会話・実体験","text":f"【{head}】\n\n{label}ってみんな何使ってる？\n\nうちはこれ。\n{e}\n\n他にもラクになるやつあったら知りたい🐾"}
         ]
     return [
-      {"kind":"あるある→発見","text":f"{pain}って、地味に困らない？\\n\\n{benefit}できるやつ見つけた。\\nこういうのでひと手間減るなら普通に気になる。"},
-      {"kind":"発見","text":f"え、{benefit}できるの知らなかった😂\\n\\n{pain}が気になってたから、こういうのちょっと気になる。\\n\\n誰か使ってる人いる？"},
-      {"kind":"もし使ったら","text":f"{pain}。\\nこれ使ったら{benefit}できそう。\\n\\nまだ使ってないけど、こういう「地味な面倒を減らす系」に弱い。"},
-      {"kind":"会話","text":f"{pain}、みんなどうしてる？\\n\\n{benefit}する{label}を見つけたんだけど、実際どうなんだろ。\\n使ってる人いたら感想知りたい🐾"}
+      {"kind":"共感・発見","text":f"【{head}】\n\n{pain}って地味に困らない？\n\n{benefit}できるやつ見つけた。\nこういう小さい面倒を減らせるの、ちょっと気になる。"},
+      {"kind":"会話・発見","text":f"【{head}】\n\n{pain}、みんなどうしてる？\n\n{benefit}できる{label}があるみたい。\n使ってる人いたら、実際どうか知りたい🐾"}
     ]
+
 
 def ai_check(text, owned=False):
     flags=[]
@@ -173,74 +191,15 @@ def ai_check(text, owned=False):
 
 def room_draft(item, owned, experience=""):
     label,pain,benefit=product_context(item.get("itemName",""))
-    price=int(item.get("itemPrice") or 0); rating=item.get("reviewAverage","-"); reviews=int(item.get("reviewCount") or 0)
+    price=int(item.get("itemPrice") or 0)
+    rating=item.get("reviewAverage","-")
+    reviews=int(item.get("reviewCount") or 0)
     if owned and experience.strip():
-        lead=f"実際に使っている{label}🐾\\n{experience.strip()}"
+        lead=f"実際に使っている{label}🐾\n{experience.strip()}"
     else:
-        lead=f"{pain}対策で見つけた{label}🐾\\n{benefit}できそうなのが気になっています。"
-    return f"{lead}\\n\\n価格：{price:,}円 / ★{rating}（{reviews:,}件）\\n\\n#便利グッズ #暮らしをラクに #楽天ROOM"
+        lead=f"{pain}対策に気になる{label}🐾\n{benefit}できるタイプ。"
+    return f"{lead}\n\n価格：{price:,}円 / ★{rating}（{reviews:,}件）\n\n#便利グッズ #暮らしをラクに #楽天ROOM"
 
-
-
-PAGE=r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>やめんちゃん AI v2</title><style>
-:root{--bg:#f6f1e8;--card:#fffdf8;--ink:#3e342d;--sub:#75675d;--line:#e5d9cc;--accent:#8a6b52}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif}
-.wrap{max-width:760px;margin:auto;padding:20px 14px 70px}h1{font-size:29px;margin:8px 0 4px}.tag{color:var(--sub);margin:0 0 18px}
-.panel,.card{background:var(--card);border:1px solid var(--line);border-radius:19px;padding:14px;margin:13px 0;box-shadow:0 4px 18px #00000008}
-.themes{display:flex;gap:7px;overflow:auto;padding-bottom:5px}.theme{white-space:nowrap;text-decoration:none;color:var(--ink);border:1px solid var(--line);padding:9px 13px;border-radius:999px;background:white}.theme.on{background:var(--ink);color:white}
-input,textarea,select,button{width:100%;font:inherit;border:1px solid var(--line);border-radius:12px;padding:11px;background:white}button{background:var(--ink);color:white;font-weight:700;border:0}
-.row{display:grid;grid-template-columns:1fr auto;gap:8px}.row button{width:auto}.top{display:flex;gap:11px}.pic{width:92px;height:92px;object-fit:cover;border-radius:12px;background:#eee}.meta{flex:1;min-width:0}.name{font-weight:700;line-height:1.45}.small{font-size:13px;color:var(--sub);line-height:1.55}.score{display:inline-block;background:#efe2d3;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;margin-bottom:4px}
-details{margin-top:10px}summary{font-weight:700;cursor:pointer}.draft{white-space:pre-wrap;background:#f7f2eb;padding:11px;border-radius:11px;margin:8px 0;font-size:14px;line-height:1.6}
-a.buy{display:inline-block;background:var(--accent);color:white;text-decoration:none;padding:9px 12px;border-radius:10px;font-size:13px;font-weight:700}.error{background:#fff0ef;border:1px solid #efc1bd;padding:12px;border-radius:12px}
-label{font-size:13px;color:var(--sub)}.ownbox{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
-@media(max-width:520px){.pic{width:82px;height:82px}.row{grid-template-columns:1fr}}
-</style></head><body><div class="wrap">
-<h1>やめんちゃん AI 🐾</h1><p class="tag">面倒くさいを、ちょっとラクに。今日の運用までまとめる。 <small>v5.2</small></p>
-<div class="panel"><div class="themes">
-{% for t in themes %}<a class="theme {% if t==theme %}on{% endif %}" href="/?theme={{t}}">{{t}}</a>{% endfor %}
-</div><form method="get" style="margin-top:10px"><input type="hidden" name="theme" value="{{theme}}">
-<div class="row"><input name="q" value="{{q}}" placeholder="自由検索：例 水切り 便利"><button>検索</button></div></form>
-<p class="small">テーマを選ぶと関連キーワードを複数検索して候補をまとめます。スコアは楽天の売上データではなく、関連度・レビュー・評価・価格帯・料率による独自指標です。</p></div>
-{% if error %}<div class="error">{{error}}</div>{% endif %}
-<div class="panel"><b>今日のやめんちゃん作戦</b>
-{% for s in schedule %}<div class="small" style="margin-top:7px"><b>{{s.time}}</b>　{{s.type}}<br>{{s.why}}</div>{% endfor %}
-<div class="small" style="margin-top:9px">※時間帯は固定の正解ではなく初期テスト枠。実績が貯まったら、やめんちゃん自身の結果を優先します。</div></div>
-{% if items %}<p class="small"><b>今日の候補 TOP {{items|length}}</b>　※同一商品を整理して表示</p>{% endif %}
-{% for x in items %}<div class="card"><div class="top">
-{% if x.image %}<img class="pic" src="{{x.image}}" alt="">{% endif %}<div class="meta"><span class="score">候補スコア {{x.score}}/100</span>
-<div class="name">{{x.itemName}}</div><div class="small"><b>{{x.badge}}</b><br>{{"{:,}".format(x.itemPrice)}}円 ・ ★{{x.reviewAverage}}（{{"{:,}".format(x.reviewCount)}}件）・ 料率{{x.affiliateRate}}%</div></div></div>
-<details><summary>投稿文を作る</summary><div class="ownbox">
-<form method="post"><input type="hidden" name="payload" value="{{x.idx}}">
-<label>この商品は？</label><select name="owned"><option value="no">🔵 持っていない</option><option value="yes">🟢 持っている</option></select>
-<label>持っている場合：実際に使って感じたこと</label><textarea name="experience" rows="3" placeholder="例：汚れてもサッと拭けて、掃除がかなりラク"></textarea>
-<button style="margin-top:8px">文案を表示</button></form>
-{% if selected==x.idx %}
-{% for d in drafts %}<div class="small"><b>{{d.kind}}</b></div><div class="draft">{{d.text}}</div>{% endfor %}
-<div class="small"><b>AI感チェック</b></div>
-{% for c in checks %}<div class="small">・{{c}}</div>{% endfor %}
-{% if room %}<div class="draft">{{room}}</div>{% endif %}
-{% endif %}
-</div></details><div style="margin-top:10px"><a class="buy" href="{{x.url}}" target="_blank" rel="noopener">楽天で確認</a></div></div>{% endfor %}
-<div class="panel"><b>投稿実績・学習</b>
-<div class="small">実績はこのiPhoneのブラウザ内に保存します。Renderの再起動・再デプロイでは消えません。</div>
-<div class="row" style="margin-top:8px"><input id="lt" placeholder="投稿時刻 例 18:40"><input id="ly" placeholder="投稿型 例 発見"></div>
-<div class="row" style="margin-top:8px"><input id="lv" type="number" placeholder="表示数"><input id="lr" type="number" placeholder="返信数"></div>
-<div class="row" style="margin-top:8px"><input id="lp" type="number" placeholder="プロフィール閲覧"><input id="lc" type="number" placeholder="ROOMクリック"></div>
-<input style="margin-top:8px" id="lo" placeholder="冒頭の一文">
-<button type="button" style="margin-top:8px" onclick="saveY()">記録する</button>
-<button type="button" style="margin-top:8px" onclick="backupY()">バックアップ</button>
-<div id="ystats" class="small" style="margin-top:10px"></div>
-</div></div>
-<script>
-function ys(){try{return JSON.parse(localStorage.getItem('yamenchan_logs')||'[]')}catch(e){return []}}
-function med(a){a=a.sort((x,y)=>x-y);if(!a.length)return 0;let m=Math.floor(a.length/2);return a.length%2?a[m]:Math.round((a[m-1]+a[m])/2)}
-function slot(t){let h=parseInt((t||'0').split(':')[0]);if(h>=11&&h<14)return'昼';if(h>=18&&h<20)return'18〜20時';if(h>=20&&h<23)return'20〜22時';return'その他'}
-function saveY(){let a=ys();a.push({date:new Date().toLocaleDateString('ja-JP'),time:lt.value,type:ly.value,views:+lv.value||0,replies:+lr.value||0,profile:+lp.value||0,clicks:+lc.value||0,opening:lo.value});localStorage.setItem('yamenchan_logs',JSON.stringify(a));showY();alert('記録しました')}
-function showY(){let a=ys(),g={};a.forEach(x=>{let k=slot(x.time)+' × '+(x.type||'未分類');(g[k]??=[]).push(x)});let s='記録 '+a.length+'件';for(let k in g){let z=g[k];s+='<br>'+k+'：表示中央値 '+med(z.map(x=>x.views))+' / 返信 '+z.reduce((n,x)=>n+x.replies,0)+' / ROOMクリック '+z.reduce((n,x)=>n+x.clicks,0)}ystats.innerHTML=s}
-function backupY(){let b=new Blob([JSON.stringify(ys(),null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='yamenchan_logs.json';a.click()}
-showY();
-</script></body></html>"""
 
 def schedule_hint():
     return [
@@ -252,7 +211,7 @@ def schedule_hint():
 def collect(theme, custom=""):
     keywords=[custom] if custom else THEMES.get(theme, THEMES["便利グッズ"])
     pool={}
-    for kw in keywords:
+    for kw in keywords[:2]:
         for sort in ("-reviewCount","standard"):
             for item in search_api(kw,20,sort):
                 name=item.get("itemName","")
@@ -317,7 +276,7 @@ def home():
 
 
 @app.route("/health")
-def health(): return {"status":"ok","version":"v5.2"}
+def health(): return {"status":"ok","version":"v5.4-lite"}
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.environ.get("PORT","10000")))
