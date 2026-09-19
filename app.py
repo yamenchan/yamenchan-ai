@@ -107,7 +107,7 @@ def search_api(keyword, hits=20, sort="-reviewCount"):
     params={"applicationId":aid,"accessKey":key,"keyword":keyword,"format":"json","formatVersion":2,
             "hits":hits,"sort":sort,"availability":1,"imageFlag":1,"carrier":2,"field":0}
     if aff: params["affiliateId"]=aff
-    r=requests.get(API_URL,params=params,timeout=20)
+    r=rakuten_get(API_URL,params=params,timeout=20)
     try: data=r.json()
     except Exception: raise RuntimeError(f"楽天API HTTP {r.status_code}: JSON応答ではありません")
     if r.status_code!=200:
@@ -180,6 +180,14 @@ def room_draft(item, owned, experience=""):
         lead=f"{pain}対策で見つけた{label}🐾\\n{benefit}できそうなのが気になっています。"
     return f"{lead}\\n\\n価格：{price:,}円 / ★{rating}（{reviews:,}件）\\n\\n#便利グッズ #暮らしをラクに #楽天ROOM"
 
+
+def schedule_hint():
+    return [
+        {"time":"11:30〜13:00","type":"商品なし・あるある/質問","why":"昼休みのテスト枠"},
+        {"time":"18:00〜20:00","type":"Threads便利グッズ","why":"夕方〜夜の主力テスト枠"},
+        {"time":"20:00〜22:00","type":"楽天ROOM","why":"ROOMの夜間閲覧を狙うテスト枠"},
+    ]
+
 def collect(theme, custom=""):
     keywords=[custom] if custom else THEMES.get(theme, THEMES["便利グッズ"])
     pool={}
@@ -236,7 +244,7 @@ def home():
             if 0<=selected<len(cards):
                 owned=request.form.get("owned")=="yes"; exp=request.form.get("experience","")
                 if owned and not exp.strip():
-                    drafts=["🟢「持っている」を選んだ場合は、実際に感じたことを入力してください。架空の使用感は作りません。"]
+                    drafts=[{"kind":"入力が必要","text":"🟢「持っている」を選んだ場合は、実際に感じたことを入力してください。架空の使用感は作りません。"}]
                     room=""
                 else:
                     drafts=threads_drafts(cards[selected]["raw"],owned,exp)
